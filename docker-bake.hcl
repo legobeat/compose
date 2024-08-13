@@ -146,3 +146,10 @@ target "image-cross" {
   inherits = ["meta-helper", "binary-cross"]
   output = ["type=image"]
 }
+
+target "image" {
+  inherits = ["meta-helper", "binary"]
+  output = ["type=image"]
+  target = "release"
+  tags = ["localhost/docker-compose:latest"]
+}
