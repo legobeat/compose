@@ -48,6 +48,7 @@ import (
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/go-connections/nat"
 	"github.com/sirupsen/logrus"
+	cdi "tags.cncf.io/container-device-interface/pkg/parser"
 )
 
 type createOptions struct {
@@ -104,7 +105,7 @@ func (s *composeService) create(ctx context.Context, project *types.Project, opt
 	orphans := observedState.filter(isOrphaned(project))
 	if len(orphans) > 0 && !options.IgnoreOrphans {
 		if options.RemoveOrphans {
-			err := s.removeContainers(ctx, orphans, nil, false)
+			err := s.removeContainers(ctx, orphans, nil, nil, false)
 			if err != nil {
 				return err
 			}
@@ -173,7 +174,7 @@ func (s *composeService) ensureProjectVolumes(ctx context.Context, project *type
 							continue
 						}
 					} else if err != nil {
-						// if we can't read the path, we won't be able ot make
+						// if we can't read the path, we won't be able to make
 						// a file share for it
 						logrus.Debugf("Skipping creating file share for %q: %v", p, err)
 						continue
@@ -645,29 +646,35 @@ func getDeployResources(s types.ServiceConfig) container.Resources {
 		setReservations(s.Deploy.Resources.Reservations, &resources)
 	}
 
+	var cdiDeviceNames []string
 	for _, device := range s.Devices {
-		// FIXME should use docker/cli parseDevice, unfortunately private
-		src := ""
-		dst := ""
-		permissions := "rwm"
-		arr := strings.Split(device, ":")
-		switch len(arr) {
-		case 3:
-			permissions = arr[2]
-			fallthrough
-		case 2:
-			dst = arr[1]
-			fallthrough
-		case 1:
-			src = arr[0]
+
+		if device.Source == device.Target && cdi.IsQualifiedName(device.Source) {
+			cdiDeviceNames = append(cdiDeviceNames, device.Source)
+			continue
 		}
-		if dst == "" {
-			dst = src
-		}
+
 		resources.Devices = append(resources.Devices, container.DeviceMapping{
-			PathOnHost:        src,
-			PathInContainer:   dst,
-			CgroupPermissions: permissions,
+			PathOnHost:        device.Source,
+			PathInContainer:   device.Target,
+			CgroupPermissions: device.Permissions,
+		})
+	}
+
+	if len(cdiDeviceNames) > 0 {
+		resources.DeviceRequests = append(resources.DeviceRequests, container.DeviceRequest{
+			Driver:    "cdi",
+			DeviceIDs: cdiDeviceNames,
+		})
+	}
+
+	for _, gpus := range s.Gpus {
+		resources.DeviceRequests = append(resources.DeviceRequests, container.DeviceRequest{
+			Driver:       gpus.Driver,
+			Count:        int(gpus.Count),
+			DeviceIDs:    gpus.IDs,
+			Capabilities: [][]string{append(gpus.Capabilities, "gpu")},
+			Options:      gpus.Options,
 		})
 	}
 
@@ -712,6 +719,7 @@ func setReservations(reservations *types.Resource, resources *container.Resource
 			Count:        int(device.Count),
 			DeviceIDs:    device.IDs,
 			Driver:       device.Driver,
+			Options:      device.Options,
 		})
 	}
 }
@@ -1021,11 +1029,18 @@ func buildContainerSecretMounts(p types.Project, s types.ServiceConfig) ([]mount
 			continue
 		}
 
+		if _, err := os.Stat(definedSecret.File); os.IsNotExist(err) {
+			logrus.Warnf("secret file %s does not exist", definedSecret.Name)
+		}
+
 		mnt, err := buildMount(p, types.ServiceVolumeConfig{
 			Type:     types.VolumeTypeBind,
 			Source:   definedSecret.File,
 			Target:   target,
 			ReadOnly: true,
+			Bind: &types.ServiceVolumeBind{
+				CreateHostPath: false,
+			},
 		})
 		if err != nil {
 			return nil, err
@@ -1078,7 +1093,7 @@ func buildMount(project types.Project, volume types.ServiceVolumeConfig) (mount.
 		}
 	}
 
-	bind, vol, tmpfs := buildMountOptions(project, volume)
+	bind, vol, tmpfs := buildMountOptions(volume)
 
 	volume.Target = path.Clean(volume.Target)
 
@@ -1098,7 +1113,7 @@ func buildMount(project types.Project, volume types.ServiceVolumeConfig) (mount.
 	}, nil
 }
 
-func buildMountOptions(project types.Project, volume types.ServiceVolumeConfig) (*mount.BindOptions, *mount.VolumeOptions, *mount.TmpfsOptions) {
+func buildMountOptions(volume types.ServiceVolumeConfig) (*mount.BindOptions, *mount.VolumeOptions, *mount.TmpfsOptions) {
 	switch volume.Type {
 	case "bind":
 		if volume.Volume != nil {
@@ -1114,11 +1129,6 @@ func buildMountOptions(project types.Project, volume types.ServiceVolumeConfig) 
 		}
 		if volume.Tmpfs != nil {
 			logrus.Warnf("mount of type `volume` should not define `tmpfs` option")
-		}
-		if v, ok := project.Volumes[volume.Source]; ok && v.DriverOpts["o"] == types.VolumeTypeBind {
-			return buildBindOption(&types.ServiceVolumeBind{
-				CreateHostPath: true,
-			}), nil, nil
 		}
 		return nil, buildVolumeOptions(volume.Volume), nil
 	case "tmpfs":
@@ -1187,7 +1197,7 @@ func (s *composeService) resolveOrCreateNetwork(ctx context.Context, n *types.Ne
 	inspect, err := s.apiClient().NetworkInspect(ctx, n.Name, network.InspectOptions{})
 	if err == nil {
 		// NetworkInspect will match on ID prefix, so double check we get the expected one
-		// as looking for network named `db` we could erroneously matched network ID `db9086999caf`
+		// as looking for network named `db` we could erroneously match network ID `db9086999caf`
 		if inspect.Name == n.Name || inspect.ID == n.Name {
 			p, ok := inspect.Labels[api.ProjectLabel]
 			if !ok {
@@ -1198,7 +1208,13 @@ func (s *composeService) resolveOrCreateNetwork(ctx context.Context, n *types.Ne
 					"Set `external: true` to use an existing network", n.Name, expectedProjectLabel)
 			}
 			if inspect.Labels[api.NetworkLabel] != expectedNetworkLabel {
-				return fmt.Errorf("network %s was found but has incorrect label %s set to %q", n.Name, api.NetworkLabel, inspect.Labels[api.NetworkLabel])
+				return fmt.Errorf(
+					"network %s was found but has incorrect label %s set to %q (expected: %q)",
+					n.Name,
+					api.NetworkLabel,
+					inspect.Labels[api.NetworkLabel],
+					expectedNetworkLabel,
+				)
 			}
 			return nil
 		}
@@ -1333,7 +1349,7 @@ func (s *composeService) resolveExternalNetwork(ctx context.Context, n *types.Ne
 			// Swarm nodes do not register overlay networks that were
 			// created on a different node unless they're in use.
 			// So we can't preemptively check network exists, but
-			// networkAttach will later fail anyway if network actually doesn't exists
+			// networkAttach will later fail anyway if network actually doesn't exist
 			return nil
 		}
 		return fmt.Errorf("network %s declared as external, but could not be found", n.Name)
