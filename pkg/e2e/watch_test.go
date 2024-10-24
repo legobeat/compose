@@ -205,7 +205,7 @@ func doTest(t *testing.T, svcName string) {
 			if strings.Contains(res.Stdout(), contents) {
 				return poll.Success()
 			}
-			return poll.Continue(res.Combined())
+			return poll.Continue("%v", res.Combined())
 		}
 	}
 
@@ -287,11 +287,10 @@ func doTest(t *testing.T, svcName string) {
 			if strings.Contains(r.Combined(), state) {
 				return poll.Success()
 			}
-			return poll.Continue(r.Combined())
+			return poll.Continue("%v", r.Combined())
 		}
 	}
-	poll.WaitOn(t, checkRestart(fmt.Sprintf("%s-1  Restarting", svcName)))
-	poll.WaitOn(t, checkRestart(fmt.Sprintf("%s-1  Started", svcName)))
+	poll.WaitOn(t, checkRestart(fmt.Sprintf("service %q restarted", svcName)))
 	poll.WaitOn(t, checkFileContents("/app/config/file.config", "This is an updated config file"))
 
 	testComplete.Store(true)
