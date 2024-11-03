@@ -55,7 +55,7 @@ func (s *composeService) Up(ctx context.Context, project *types.Project, options
 		return err
 	}
 	if s.dryRun {
-		fmt.Fprintln(s.stdout(), "end of 'compose up' output, interactive run is not supported in dry-run mode")
+		_, _ = fmt.Fprintln(s.stdout(), "end of 'compose up' output, interactive run is not supported in dry-run mode")
 		return err
 	}
 
@@ -77,7 +77,7 @@ func (s *composeService) Up(ctx context.Context, project *types.Project, options
 		first := true
 		gracefulTeardown := func() {
 			printer.Cancel()
-			fmt.Fprintln(s.stdinfo(), "Gracefully stopping... (press Ctrl+C again to force)")
+			_, _ = fmt.Fprintln(s.stdinfo(), "Gracefully stopping... (press Ctrl+C again to force)")
 			eg.Go(func() error {
 				err := s.Stop(context.WithoutCancel(ctx), project.Name, api.StopOptions{
 					Services: options.Create.Services,
@@ -98,10 +98,9 @@ func (s *composeService) Up(ctx context.Context, project *types.Project, options
 				defer keyboard.Close() //nolint:errcheck
 				isWatchConfigured := s.shouldWatch(project)
 				isDockerDesktopActive := s.isDesktopIntegrationActive()
-				isDockerDesktopComposeUI := s.isDesktopUIEnabled()
-				tracing.KeyboardMetrics(ctx, options.Start.NavigationMenu, isDockerDesktopActive, isWatchConfigured, isDockerDesktopComposeUI)
+				tracing.KeyboardMetrics(ctx, options.Start.NavigationMenu, isDockerDesktopActive, isWatchConfigured)
 
-				formatter.NewKeyboardManager(ctx, isDockerDesktopActive, isWatchConfigured, isDockerDesktopComposeUI, signalChan, s.watch)
+				formatter.NewKeyboardManager(ctx, isDockerDesktopActive, isWatchConfigured, signalChan, s.watch)
 				if options.Start.Watch {
 					formatter.KeyboardManager.StartWatch(ctx, doneCh, project, options)
 				}
@@ -144,7 +143,7 @@ func (s *composeService) Up(ctx context.Context, project *types.Project, options
 	var exitCode int
 	eg.Go(func() error {
 		code, err := printer.Run(options.Start.OnExit, options.Start.ExitCodeFrom, func() error {
-			fmt.Fprintln(s.stdinfo(), "Aborting on container exit...")
+			_, _ = fmt.Fprintln(s.stdinfo(), "Aborting on container exit...")
 			return progress.Run(ctx, func(ctx context.Context) error {
 				return s.Stop(ctx, project.Name, api.StopOptions{
 					Services: options.Create.Services,

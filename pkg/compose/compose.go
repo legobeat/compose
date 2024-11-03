@@ -176,7 +176,10 @@ func (s *composeService) projectFromName(containers Containers, projectName stri
 	}
 	set := types.Services{}
 	for _, c := range containers {
-		serviceLabel := c.Labels[api.ServiceLabel]
+		serviceLabel, ok := c.Labels[api.ServiceLabel]
+		if !ok {
+			serviceLabel = getCanonicalContainerName(c)
+		}
 		service, ok := set[serviceLabel]
 		if !ok {
 			service = types.ServiceConfig{
@@ -191,7 +194,7 @@ func (s *composeService) projectFromName(containers Containers, projectName stri
 	}
 	for name, service := range set {
 		dependencies := service.Labels[api.DependenciesLabel]
-		if len(dependencies) > 0 {
+		if dependencies != "" {
 			service.DependsOn = types.DependsOnConfig{}
 			for _, dc := range strings.Split(dependencies, ",") {
 				dcArr := strings.Split(dc, ":")
@@ -323,11 +326,4 @@ func (s *composeService) RuntimeVersion(ctx context.Context) (string, error) {
 
 func (s *composeService) isDesktopIntegrationActive() bool {
 	return s.desktopCli != nil
-}
-
-func (s *composeService) isDesktopUIEnabled() bool {
-	if !s.isDesktopIntegrationActive() {
-		return false
-	}
-	return s.experiments.ComposeUI()
 }

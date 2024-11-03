@@ -90,6 +90,10 @@ type Service interface {
 	Wait(ctx context.Context, projectName string, options WaitOptions) (int64, error)
 	// Scale manages numbers of container instances running per service
 	Scale(ctx context.Context, project *types.Project, options ScaleOptions) error
+	// Export a service container's filesystem as a tar archive
+	Export(ctx context.Context, projectName string, options ExportOptions) error
+	// Generate generates a Compose Project from existing containers
+	Generate(ctx context.Context, options GenerateOptions) (*types.Project, error)
 }
 
 type ScaleOptions struct {
@@ -196,7 +200,7 @@ type CreateOptions struct {
 	RecreateDependencies string
 	// Inherit reuse anonymous volumes from previous container
 	Inherit bool
-	// Timeout set delay to wait for container to gracelfuly stop before sending SIGKILL
+	// Timeout set delay to wait for container to gracefully stop before sending SIGKILL
 	Timeout *time.Duration
 	// QuietPull makes the pulling process quiet
 	QuietPull bool
@@ -289,6 +293,7 @@ type ConfigOptions struct {
 type PushOptions struct {
 	Quiet          bool
 	IgnoreFailures bool
+	ImageMandatory bool
 }
 
 // PullOptions group options of the Pull API
@@ -553,6 +558,20 @@ type PauseOptions struct {
 	Project *types.Project
 }
 
+// ExportOptions group options of the Export API
+type ExportOptions struct {
+	Service string
+	Index   int
+	Output  string
+}
+
+type GenerateOptions struct {
+	// ProjectName to set in the Compose file
+	ProjectName string
+	// Containers passed in the command line to be used as reference for service definition
+	Containers []string
+}
+
 const (
 	// STARTING indicates that stack is being deployed
 	STARTING string = "Starting"
@@ -628,6 +647,8 @@ const (
 	ContainerEventExit
 	// UserCancel user cancelled compose up, we are stopping containers
 	UserCancel
+	// HookEventLog is a ContainerEvent of type log on stdout by service hook
+	HookEventLog
 )
 
 // Separator is used for naming components
